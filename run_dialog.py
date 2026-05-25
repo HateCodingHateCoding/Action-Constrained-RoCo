@@ -12,7 +12,7 @@ from typing import List, Tuple, Dict, Union, Optional, Any
 from collections import defaultdict
 import matplotlib.pyplot as plt
 
-from rocobench.envs import SortOneBlockTask, CabinetTask, MoveRopeTask, SweepTask, MakeSandwichTask, PackGroceryTask, MujocoSimEnv, SimRobot, visualize_voxel_scene
+from rocobench.envs import SortOneBlockTask, CabinetTask, MoveRopeTask, SweepTask, MakeSandwichTask, PackGroceryTask, BlockRelayTask, MujocoSimEnv, SimRobot, visualize_voxel_scene
 from rocobench import PlannedPathPolicy, LLMPathPlan, MultiArmRRT
 from prompting import LLMResponseParser, FeedbackManager, DialogPrompter, SingleThreadPrompter, save_episode_html
 
@@ -27,6 +27,7 @@ TASK_NAME_MAP = {
     "sweep": SweepTask,
     "sandwich": MakeSandwichTask,
     "pack": PackGroceryTask,
+    "relay": BlockRelayTask,
 }
 
 class LLMRunner:
@@ -152,18 +153,14 @@ class LLMRunner:
 
 
     def display_plan(self, plan: LLMPathPlan, save_name = "vis_plan", save_dir = None):
-        """ Display the plan in the open3d viewer """ 
-        env = deepcopy(self.env)
-        env.physics.data.qpos[:] = self.env.physics.data.qpos[:].copy()
-        env.physics.forward()
-        env.render_point_cloud = True
-        obs = env.get_obs()
-        path_ls = plan.path_3d_list
+        """Render the scene using MuJoCo cameras"""
         if save_dir is not None:
             save_path = os.path.join(save_dir, f"{save_name}.jpg")
+        else:
+            save_path = None
         visualize_voxel_scene(
-            obs.scene,
-            path_pts=path_ls,
+            physics=self.env.physics,
+            camera_id='teaser',
             save_img=(save_dir is not None),
             img_path=save_path
             )
@@ -209,6 +206,7 @@ class LLMRunner:
                 prompt_breakdown = dict()
 
             else:
+                logging.info(f"Step: {step} requesting LLM plan")
                 ready_to_execute, current_llm_plan, response, prompt_breakdown = self.prompter.prompt_one_round(
                     obs,
                     save_path=prompt_path,
@@ -294,8 +292,9 @@ class LLMRunner:
             with open(data_fname, "wb") as f:
                 pickle.dump(sim_data, f)
 
+            obs = env.get_obs()
             self.prompter.post_execute_update(
-                obs_desp="", # TODO
+                obs_desp=env.describe_obs(obs),
                 execute_success=(not rewind_env),
                 parsed_plan=current_llm_plan[0].get_action_desp()
             )
@@ -409,7 +408,7 @@ def main(args):
         render_freq = 2000
     elif args.control_freq == 5:
         render_freq = 3000
-    env = env_cl(
+    env_kwargs = dict(
         render_freq=render_freq,
         image_hw=(400,400),
         sim_forward_steps=300,
@@ -418,8 +417,10 @@ def main(args):
         randomize_init=True,
         render_point_cloud=0,
         render_cameras=["face_panda","face_ur5e","teaser",],
-        one_obj_each=True,
     )
+    if args.task not in ("sort", "relay"):
+        env_kwargs["one_obj_each"] = True
+    env = env_cl(**env_kwargs)
     robots = env.get_sim_robots()
     if args.no_feedback:
         assert args.num_replans == 1, "no feedback mode requires num_replans=1 but longer -tsteps"
@@ -487,7 +488,7 @@ if __name__ == "__main__":
     parser.add_argument("--split_parsed_plans", "-sp", action="store_true")
     parser.add_argument("--no_history", "-nh", action="store_true")
     parser.add_argument("--no_feedback", "-nf", action="store_true")
-    parser.add_argument("--llm_source", "-llm", type=str, default="gpt-4")
+    parser.add_argument("--llm_source", "-llm", type=str, default="glm-5.1")
     logging.basicConfig(level=logging.INFO)
 
     args = parser.parse_args()

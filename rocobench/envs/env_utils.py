@@ -3,11 +3,16 @@ import os
 import io
 import numpy as np 
 from itertools import product
-from pydantic import dataclasses, validator
+from pydantic import dataclasses
+from pydantic.v1 import validator
 from transforms3d import affines, quaternions, euler
 from typing import Dict, List, Optional, Sequence, Tuple
 import matplotlib.pyplot as plt 
-import open3d as o3d
+try:
+    import open3d as o3d
+    HAS_OPEN3D = True
+except ImportError:
+    HAS_OPEN3D = False
 from matplotlib.patches import Patch
 from PIL import Image 
 import seaborn as sns
@@ -132,15 +137,33 @@ GRADIENT_COLORS = [
     "gist_earth",
 ]
 def visualize_voxel_scene(
-    obs_pcd: PointCloud, 
-    voxel_size: float = 0.02, 
-    path_pts: List = [], 
+    obs_pcd=None,
+    voxel_size: float = 0.02,
+    path_pts: List = [],
     path_colors: List = [],
     save_img = False,
     img_path = 'test.jpg',
     expand_path = False,
+    physics = None,
+    camera_id = 'teaser',
     ):
-    """ Displays the scene and path points as voxels """
+    """Renders the scene using MuJoCo camera and overlays path points."""
+    if physics is not None:
+        img_arr = physics.render(camera_id=camera_id, height=480, width=640)
+        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+        ax.imshow(img_arr)
+        ax.set_title('MuJoCo Scene Render')
+        ax.axis('off')
+        if save_img:
+            plt.savefig(img_path, dpi=100, bbox_inches='tight')
+            print(f"Scene saved to {img_path}")
+        plt.close(fig)
+        return
+
+    if not HAS_OPEN3D or obs_pcd is None:
+        print("Skipping visualization (no open3d or no point cloud data)")
+        return
+
     pcd = obs_pcd.to_open3d()
     voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, voxel_size)
     new_voxels = []
@@ -262,7 +285,9 @@ class PointCloud:
             },
         )
 
-    def to_open3d(self, color_palette: str = 'colorblind') -> o3d.geometry.PointCloud:
+    def to_open3d(self, color_palette: str = 'colorblind'):
+        if not HAS_OPEN3D:
+            return None
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(self.xyz_pts)
         pcd.colors = o3d.utility.Vector3dVector(self.rgb_pts.astype(float)/255.0)
@@ -272,6 +297,8 @@ class PointCloud:
         self, voxel_dim: float = 0.015, skip_segmentation: bool = True
     ) -> PointCloud:
         pcd = self.to_open3d()
+        if pcd is None:
+            return self
         pcd = pcd.voxel_down_sample(voxel_dim)
         xyz_pts = np.array(pcd.points).astype(np.float32)
         return PointCloud(
@@ -283,6 +310,8 @@ class PointCloud:
     @property
     def normals(self) -> np.ndarray:
         pcd = self.to_open3d()
+        if pcd is None:
+            return np.zeros((len(self.xyz_pts), 3))
         pcd.estimate_normals(
             search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.04, max_nn=30)
         )

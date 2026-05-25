@@ -94,9 +94,9 @@ class MultiArmRRT:
                     try:
                         mjsite = physics.data.site(site_name)
                         qpos_slice = physics.named.data.qpos._convert_key(joint_name) 
-                    except: 
+                    except:
                         print(f"Error: site_name: {site_name} joint_name {joint_name} not found in mujoco model")
-                        breakpoint() 
+                        continue
                     self.inhand_object_info[name] = (body_name, site_name, joint_name, (qpos_slice.start, qpos_slice.stop))
         return 
  
@@ -508,8 +508,7 @@ class MultiArmRRT:
             
             qpos_str = " ".join(physics.data.qpos.astype(str))
             print(f"<key name='rrt_check' qpos='{qpos_str}'/>")
-            breakpoint()
-           
+
         return bad_pairs
     
     def check_relative_pose(

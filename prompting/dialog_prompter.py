@@ -1,7 +1,6 @@
-import os 
+import os
 import json
-import pickle 
-import openai
+import pickle
 import numpy as np
 from datetime import datetime
 from os.path import join
@@ -9,28 +8,24 @@ from typing import List, Tuple, Dict, Union, Optional, Any
 
 from rocobench.subtask_plan import LLMPathPlan
 from rocobench.rrt_multi_arm import MultiArmRRT
-from rocobench.envs import MujocoSimEnv, EnvState 
+from rocobench.envs import MujocoSimEnv, EnvState
 from .feedback import FeedbackManager
 from .parser import LLMResponseParser
-
-assert os.path.exists("openai_key.json"), "Please put your OpenAI API key in a string in robot-collab/openai_key.json"
-OPENAI_KEY = str(json.load(open("openai_key.json")))
-openai.api_key = OPENAI_KEY
+from .llm_api import chat_completion
 
 PATH_PLAN_INSTRUCTION="""
-[Path Plan Instruction]
-Each <coord> is a tuple (x,y,z) for gripper location, follow these steps to plan:
-1) Decide target location (e.g. an object you want to pick), and your current gripper location.
-2) Plan a list of <coord> that move smoothly from current gripper to the target location.
-3) The <coord>s must be evenly spaced between start and target.
-4) Each <coord> must not collide with other robots, and must stay away from table and objects.  
-[How to Incoporate [Enviornment Feedback] to improve plan]
-    If IK fails, propose more feasible step for the gripper to reach. 
-    If detected collision, move robot so the gripper and the inhand object stay away from the collided objects. 
-    If collision is detected at a Goal Step, choose a different action.
-    To make a path more evenly spaced, make distance between pair-wise steps similar.
-        e.g. given path [(0.1, 0.2, 0.3), (0.2, 0.2. 0.3), (0.3, 0.4. 0.7)], the distance between steps (0.1, 0.2, 0.3)-(0.2, 0.2. 0.3) is too low, and between (0.2, 0.2. 0.3)-(0.3, 0.4. 0.7) is too high. You can change the path to [(0.1, 0.2, 0.3), (0.15, 0.3. 0.5), (0.3, 0.4. 0.7)] 
-    If a plan failed to execute, re-plan to choose more feasible steps in each PATH, or choose different actions.
+[路径规划指令]
+每个 <coord> 是一个 (x,y,z) 元组，表示夹爪位置，按以下步骤规划：
+1) 确定目标位置（如你要抓取的物体）和当前夹爪位置。
+2) 规划一组从当前夹爪平滑移动到目标位置的 <coord> 列表。
+3) 各 <coord> 之间的间距应均匀。
+4) 每个 <coord> 不能与其他机器人碰撞，且必须远离桌面和物体。
+[如何利用 [环境反馈] 改进计划]
+    如果 IK 失败，提出更可行的夹爪移动路径。
+    如果检测到碰撞，移动机器人使夹爪和手中物体远离碰撞物体。
+    如果在目标步骤检测到碰撞，选择不同的动作。
+    使路径间距更均匀：让相邻步骤之间的距离相近。
+    如果计划执行失败，重新规划更可行的 PATH 步骤，或选择不同的动作。
 """
 
 class DialogPrompter:
@@ -70,7 +65,6 @@ class DialogPrompter:
         self.max_calls_per_round = max_calls_per_round 
         self.temperature = temperature
         self.llm_source = llm_source
-        assert llm_source in ["gpt-4", "gpt-3.5-turbo", "claude"], f"llm_source must be one of [gpt4, gpt-3.5-turbo, claude], got {llm_source}"
 
     def compose_system_prompt(
         self, 
@@ -89,28 +83,28 @@ class DialogPrompter:
 
         execute_feedback = ""
         if len(self.failed_plans) > 0:
-            execute_feedback = "Plans below failed to execute, improve them to avoid collision and smoothly reach the targets:\n"
+            execute_feedback = "以下计划执行失败，请改进以避免碰撞并平稳到达目标：\n"
             execute_feedback += "\n".join(self.failed_plans) + "\n"
 
-        chat_history = "[Previous Chat]\n" + "\n".join(chat_history) if len(chat_history) > 0 else ""
-            
-        system_prompt = f"{action_desp}\n{round_history}\n{execute_feedback}{agent_prompt}\n{chat_history}\n" 
-        
+        chat_history = "[之前的对话]\n" + "\n".join(chat_history) if len(chat_history) > 0 else ""
+
+        system_prompt = f"{action_desp}\n{round_history}\n{execute_feedback}{agent_prompt}\n{chat_history}\n"
+
         if self.use_feedback and len(feedback_history) > 0:
             system_prompt += "\n".join(feedback_history)
-        
+
         if len(current_chat) > 0:
-            system_prompt += "[Current Chat]\n" + "\n".join(current_chat) + "\n"
+            system_prompt += "[当前对话]\n" + "\n".join(current_chat) + "\n"
 
         return system_prompt 
 
     def get_round_history(self):
         if len(self.round_history) == 0:
             return ""
-        ret = "[History]\n"
+        ret = "[历史记录]\n"
         for i, history in enumerate(self.round_history):
-            ret += f"== Round#{i} ==\n{history}\n"
-        ret += f"== Current Round ==\n"
+            ret += f"== 第{i}轮 ==\n{history}\n"
+        ret += f"== 当前轮 ==\n"
         return ret
     
     def prompt_one_round(self, obs: EnvState, save_path: str = ""): 
@@ -128,10 +122,10 @@ class DialogPrompter:
             parse_succ, parsed_str, llm_plans = self.parser.parse(obs, final_response) 
 
             curr_feedback = "None"
-            if not parse_succ:  
+            if not parse_succ:
                 curr_feedback = f"""
-This previous response from [{final_agent}] failed to parse!: '{final_response}'
-{parsed_str} Re-format to strictly follow [Action Output Instruction]!"""
+[{final_agent}]的上一个回复解析失败！: '{final_response}'
+{parsed_str} 请严格按照[动作输出格式]重新输出！"""
                 ready_to_execute = False  
             
             else:
@@ -191,11 +185,11 @@ This previous response from [{final_agent}] failed to parse!: '{final_response}'
                     feedback_history=feedback_history,   
                     ) 
                 
-                agent_prompt = f"You are {agent_name}, your response is:"
+                agent_prompt = f"你是{agent_name}，请用中文回复你的想法和计划："
                 if n_calls == self.max_calls_per_round - 1:
                     agent_prompt = f"""
-You are {agent_name}, this is the last call, you must end your response by incoporating all previous discussions and output the best plan via EXECUTE. 
-Your response is:
+你是{agent_name}，这是最后一轮发言，你必须综合之前所有讨论，通过 EXECUTE 输出最终计划。
+你的回复是：
                     """
                 response, usage = self.query_once(
                     system_prompt, 
@@ -249,11 +243,9 @@ Your response is:
 
     def query_once(self, system_prompt, user_prompt, max_query):
         response = None
-        usage = None   
-        # print('======= system prompt ======= \n ', system_prompt)
-        # print('======= user prompt ======= \n ', user_prompt)
+        usage = None
 
-        if self.debug_mode: 
+        if self.debug_mode:
             response = "EXECUTE\n"
             for aname in self.robot_agent_names:
                 action = input(f"Enter action for {aname}:\n")
@@ -262,25 +254,19 @@ Your response is:
 
         for n in range(max_query):
             print('querying {}th time'.format(n))
-            try:
-                response = openai.ChatCompletion.create(
-                    model=self.llm_source, 
-                    messages=[
-                        # {"role": "user", "content": ""},
-                        {"role": "system", "content": system_prompt+user_prompt},                                    
-                    ],
-                    max_tokens=self.max_tokens,
-                    temperature=self.temperature,
-                    )
-                usage = response['usage']
-                response = response['choices'][0]['message']["content"]
+            response, usage = chat_completion(
+                model=self.llm_source,
+                messages=[
+                    {"role": "user", "content": system_prompt + user_prompt},
+                ],
+                max_tokens=8192,
+                temperature=self.temperature,
+            )
+            if response is not None:
                 print('======= response ======= \n ', response)
                 print('======= usage ======= \n ', usage)
                 break
-            except:
-                print("API error, try again")
-            continue
-        # breakpoint()
+            print("API returned None, retrying...")
         return response, usage
     
     def post_execute_update(self, obs_desp: str, execute_success: bool, parsed_plan: str):

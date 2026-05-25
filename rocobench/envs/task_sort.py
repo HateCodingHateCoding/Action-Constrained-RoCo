@@ -32,13 +32,13 @@ SORTING_BIN_NAMES=[
     "panel6",
 ]
 
-SORT_TASK_CONTEXT=""" 
-7 panels on the table, ordered left to right: panel1,...,panel7. They form a straight assembly line, panel1 is closed to panel2 and farthest from panel7.
-There are 3 cubes, each robot must place their cube on the correct target, their (cube, target_panel) pairs: 
-Alice: (blue_square, panel2), 
-Bob: (pink_polygon, panel4), 
-Chad: (yellow_trapezoid, panel6).
-There are 3 robots, each with a limited reach range, this means they can only pick cubes from these panels, and can only place cubes on these panels. The (robot, [reachable_panels]) pairs: 
+SORT_TASK_CONTEXT="""
+桌面上有7个面板，从左到右排列为：panel1,...,panel7。它们组成一条直线流水线，panel1 靠近 panel2，离 panel7 最远。
+桌上有3个方块，每个机器人必须把方块放到正确的目标面板上，它们的（方块，目标面板）对应关系为：
+Alice: (blue_square, panel2),
+Bob: (pink_polygon, panel4),
+Chad: (yellow_trapezoid, panel6)。
+有3个机器人，每个机器人的臂展有限，只能从特定面板上拿取方块或放置方块。机器人与可达面板的对应关系：
 (Alice, [panel1, panel2, panel3])
 (Bob, [panel3, panel4, panel5])
 (Chad, [panel5, panel6, panel7])
@@ -46,24 +46,24 @@ There are 3 robots, each with a limited reach range, this means they can only pi
  
 SORT_TASK_DIALOG_PROMPT=""
 
-SORT_TASK_CHAT_PROMPT="""Robots discuss to find the best strategy. When each robot talk, it reasons about its own capability (e.g. I am Bob, I can only reach panel3), verifies other robots' claims (e.g. I am Alice, this trapezoid cube is indeed too far for Chad), then decide how to best achieve the task and help each other (e.g. therefore I will move it to panel3 so it's closer to Chad). 
-Carefully analyze Environment Feedback, Scene Description and others' responses to coordinate together. They talk in order [Alice],[Bob],[Chad],[Alice] ..., then, after everyone agreed, propose **exactly** one ACTION per robot, then stop talking. 
-Their entire chat history and the final plan are: 
+SORT_TASK_CHAT_PROMPT="""机器人们互相讨论以找到最佳策略。每个机器人发言时，先分析自己的能力（例如：我是Bob，我只能够到panel3-5），然后验证其他机器人的判断（例如：我是Alice，这个梯形方块确实离Chad太远了），最后决定如何协作完成任务（例如：因此我先把它移到panel3，这样Chad就能够到了）。
+仔细分析[环境反馈]、场景描述和其他机器人的回复来协调合作。发言顺序为 [Alice],[Bob],[Chad],[Alice] ...，达成一致后，为每个机器人提出**恰好一个** ACTION，然后停止讨论。
+完整的对话记录和最终计划如下：
 """
 
 SORT_TASK_PLAN_PROMPT="""
-Think step-by-step and reason about the best strategy for each robot to achieve their goal or best help others. Carefully consider Environment Feedback and Scene Description.
-Decide which cubes and panels can be reached by each robot. At each round, plan **exactly** one ACTION per robot. 
+请逐步思考，为每个机器人制定最佳策略来完成目标或帮助其他机器人。仔细考虑[环境反馈]和场景描述。
+判断每个机器人能够到哪些方块和面板。每一轮为每个机器人规划**恰好一个** ACTION。
 """
 
 SORTING_ACTION_SPACE="""
-[Action Options]
-1) PICK <object name> PLACE <location>
+[可用动作]
+1) PICK <物体名> PLACE <目标位置>
 2) WAIT
-Only PICK an object if your gripper is empty. Target <location> for PLACE should be panel or a bin.
-[Action Output Instruction]
-You must first output 'EXECUTE\n', then give **exactly** one action per robot, put each on a new line.
-Example: 'EXECUTE\nNAME Alice ACTION PICK red_square PLACE panel3\nNAME Bob ACTION WAIT\nNAME Chad ACTION PICK green_trapezoid PLACE panel6\n'
+只有当夹爪为空时才能 PICK 物体。PLACE 的目标位置应为面板(panel)。
+[动作输出格式]
+你必须先输出 'EXECUTE\n'，然后为每个机器人给出**恰好一个**动作，每个动作占一行。
+示例: 'EXECUTE\nNAME Alice ACTION PICK red_square PLACE panel3\nNAME Bob ACTION WAIT\nNAME Chad ACTION PICK green_trapezoid PLACE panel6\n'
 """
 
 class SortOneBlockTask(MujocoSimEnv):
@@ -501,6 +501,155 @@ In the plan, at least one robot should be acting, you can't all WAIT.
     
     def get_object_joint_name(self, obj_name):
         return f"{obj_name}_joint"
+
+    # ---------------- RL extension hooks ----------------
+    PANEL_NAMES = [f"panel{i}" for i in range(1, 8)]
+
+    def get_action_vocab(self) -> Dict[str, List[str]]:
+        return dict(
+            agents=["Alice", "Bob", "Chad"],
+            objects=["WAIT"] + list(ONE_OBJ_EACH),
+            targets=list(self.PANEL_NAMES),
+        )
+
+    def _agent_reachable_panel_idxs(self, agent_name: str) -> List[int]:
+        names = self.reachable_panels[agent_name]
+        return [self.PANEL_NAMES.index(n) for n in names]
+
+    def get_action_mask(self, obs: EnvState) -> Dict[str, Any]:
+        vocab = self.get_action_vocab()
+        n_obj = len(vocab["objects"])      # WAIT + 3 cubes
+        n_tgt = len(vocab["targets"])      # 7 panels
+        ret = {}
+        for agent_name in vocab["agents"]:
+            robot_name = self.robot_name_map_inv[agent_name]
+            robot_state = getattr(obs, robot_name)
+            # holding == has any cube name in contacts
+            holding = any(c in self.cube_names for c in robot_state.contacts)
+
+            obj_mask = np.zeros(n_obj, dtype=bool)
+            target_mask = np.zeros((n_obj, n_tgt), dtype=bool)
+
+            # WAIT is always legal; targets dim is irrelevant for WAIT row
+            obj_mask[0] = True
+            target_mask[0, :] = True
+
+            # If hands are full, only WAIT is legal (a separate RELEASE/PLACE
+            # is bundled inside PICK X PLACE Y in this benchmark).
+            if holding:
+                ret[agent_name] = dict(obj_mask=obj_mask, target_mask=target_mask)
+                continue
+
+            reach_panel_idxs = self._agent_reachable_panel_idxs(agent_name)
+            for oi, oname in enumerate(vocab["objects"][1:], start=1):
+                # cube must be in this agent's reach
+                top_site = obs.objects[oname].sites[f"{oname}_top"]
+                if not self.check_reach_range(robot_name, top_site.xpos):
+                    continue
+                obj_mask[oi] = True
+                # only the panels this agent can reach are valid place targets
+                for ti in reach_panel_idxs:
+                    target_mask[oi, ti] = True
+
+                # ---- task-specific cube/target compatibility ----
+                # (mirrors get_task_feedback): each cube is only allowed on its
+                # correct bin or the shared relay panels (panel3, panel5).
+                correct_panel = self.cube_to_bin[oname]  # panel2/4/6
+                allowed = {correct_panel, "panel3", "panel5"}
+                for ti in range(n_tgt):
+                    if vocab["targets"][ti] not in allowed:
+                        target_mask[oi, ti] = False
+            # if no PICK is feasible after masking, target row stays zero;
+            # ensure at least WAIT remains.
+            ret[agent_name] = dict(obj_mask=obj_mask, target_mask=target_mask)
+        return ret
+
+    def _cube_progress(self, obs: EnvState) -> Dict[str, Dict[str, float]]:
+        """For each cube: distance to its correct bin and whether it's already there."""
+        info = {}
+        for cname in self.cube_names:
+            target_bin = self.cube_to_bin[cname]
+            bin_xy = self.bin_slot_pos[f"{target_bin}_middle"][:2]
+            cube_xy = obs.objects[cname].xpos[:2]
+            d = float(np.linalg.norm(bin_xy - cube_xy))
+            done = (d < self.align_threshold) or (target_bin in obs.objects[cname].contacts)
+            info[cname] = dict(dist=d, done=done, target=target_bin)
+        return info
+
+    def get_rl_reward(self, prev_obs: EnvState, obs: EnvState,
+                      action_info: Dict) -> Tuple[float, Dict]:
+        """
+        Composite reward:
+          + task: per-cube first-time placement (+10) and global success (+50)
+          + shaping: potential-based on cube-to-target distance
+          + handoff: helping move someone else's cube into reach (+2)
+          - invalid action / collision penalties
+          - per-step time cost (-0.05) and all-WAIT (-0.5)
+        """
+        prev_info = self._cube_progress(prev_obs)
+        info = self._cube_progress(obs)
+
+        r = 0.0
+        breakdown = {}
+
+        # 4.1 task reward (sub-goal first achievement)
+        r_goal = 0.0
+        for cname, cur in info.items():
+            if cur["done"] and (not prev_info[cname]["done"]):
+                r_goal += 10.0
+        breakdown["r_goal"] = r_goal
+        r += r_goal
+
+        # 4.1 global success bonus
+        all_done = all(v["done"] for v in info.values())
+        r_done = 50.0 if (all_done and not all(v["done"] for v in prev_info.values())) else 0.0
+        breakdown["r_done"] = r_done
+        r += r_done
+
+        # 4.2 potential-based shaping (negative distance sum)
+        gamma = float(action_info.get("gamma", 0.99))
+        phi_prev = -sum(v["dist"] for v in prev_info.values())
+        phi_cur = -sum(v["dist"] for v in info.values())
+        r_shape = gamma * phi_cur - phi_prev
+        breakdown["r_shape"] = r_shape
+        r += r_shape
+
+        # 4.3 handoff: any agent moved a cube to extend reachability for the
+        # cube's owner, while the cube is not yet at goal.
+        r_handoff = 0.0
+        for cname, cur in info.items():
+            if cur["done"]:
+                continue
+            owner = next(a for a, (cube, _) in self.cube_targets.items() if cube == cname)
+            owner_robot = self.robot_name_map_inv[owner]
+            prev_reach = self.check_reach_range(owner_robot, prev_obs.objects[cname].xpos)
+            cur_reach = self.check_reach_range(owner_robot, obs.objects[cname].xpos)
+            if (not prev_reach) and cur_reach:
+                r_handoff += 2.0
+        breakdown["r_handoff"] = r_handoff
+        r += r_handoff
+
+        # 4.4 penalties from action_info
+        n_invalid = int(action_info.get("n_invalid", 0))
+        r_invalid = -2.0 * n_invalid
+        breakdown["r_invalid"] = r_invalid
+        r += r_invalid
+
+        n_collision = int(action_info.get("n_collision", 0))
+        r_collision = -1.0 * n_collision
+        breakdown["r_collision"] = r_collision
+        r += r_collision
+
+        if bool(action_info.get("all_wait", False)):
+            r += -0.5
+            breakdown["r_all_wait"] = -0.5
+
+        r_step = -0.05
+        r += r_step
+        breakdown["r_step"] = r_step
+
+        breakdown["done"] = all_done
+        return float(r), breakdown
 
     def chat_mode_prompt(self, chat_history: List[str] = []):
         return SORT_TASK_CHAT_PROMPT

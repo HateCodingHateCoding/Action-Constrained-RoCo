@@ -136,19 +136,23 @@ class SimAction:
     @validator("ctrl_vals", "qpos_target",)
     def _validate_vals(cls, v):
         if v is None:
-            return []  
-        assert isinstance(v, List) or isinstance(v, np.ndarray), f"Invalid idxs, got {type(v)}"
+            return []
+        if isinstance(v, np.ndarray):
+            return v.astype(np.float32)
+        assert isinstance(v, List), f"Invalid type, got {type(v)}"
         if len(v) > 0:
-            assert all([isinstance(i, np.float32) for i in v]), f"Invalid value, got {type(v)}"
-        return v 
+            assert all([isinstance(i, (np.float32, float)) for i in v]), f"Invalid value, got {type(v)}"
+        return v
 
     @validator("ctrl_idxs", "qpos_idxs")
     def _validate_idxs(cls, v):
         if v is None:
-            return [] 
-        assert isinstance(v, List) or isinstance(v, np.ndarray), f"Invalid idxs, got {type(v)}"
+            return []
+        if isinstance(v, np.ndarray):
+            return v.astype(np.int32)
+        assert isinstance(v, List), f"Invalid type, got {type(v)}"
         if len(v) > 0:
-            assert all([isinstance(i, np.int32) for i in v]), f"Invalid idx, got {type(v)}"
+            assert all([isinstance(i, (np.int32, int)) for i in v]), f"Invalid idx, got {type(v)}"
         return v
 
     def __post_init__(self):
@@ -344,6 +348,21 @@ class MujocoSimEnv:
     def nmodel(self):
         return self.physics.named.model
 
+    def get_eq_active(self):
+        if hasattr(self.physics.data, 'eq_active'):
+            return self.physics.data.eq_active
+        if hasattr(self.physics.model, 'eq_active'):
+            return self.physics.model.eq_active
+        return getattr(self.physics.model, 'eq_active0', [])
+
+    def set_eq_active(self, eq_active):
+        if hasattr(self.physics.data, 'eq_active'):
+            self.physics.data.eq_active[:] = eq_active
+        elif hasattr(self.physics.model, 'eq_active'):
+            self.physics.model.eq_active[:] = eq_active
+        elif hasattr(self.physics.model, 'eq_active0'):
+            self.physics.model.eq_active0[:] = eq_active
+
     def clear_camera_buffer(self):
         self.render_buffers = {cam: deque(maxlen=1000) for cam in self.render_cameras}
 
@@ -395,8 +414,8 @@ class MujocoSimEnv:
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             video = cv2.VideoWriter(
                 output_name, fourcc, fps, (h, w))
-            for img in all_imgs: 
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) 
+            for img in all_imgs:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 video.write(img)
             video.release() 
         print('Video gif, total {} frames, saved to {}'.format(render_steps, output_name))
@@ -497,7 +516,7 @@ class MujocoSimEnv:
             ret[obj2.name].add(obj1.name)
             ret[obj2.name].add(body1.name) 
         # also check eq_active
-        active = model.eq_active 
+        active = self.get_eq_active()
         nbody = model.nbody
         for i in range(len(active)):
             if active[i]:
@@ -655,7 +674,7 @@ class MujocoSimEnv:
             # _dict = self.convert_named_data_to_dict(attr_name)
             # kwargs.update(_dict)
             kwargs[attr_name] = deepcopy(getattr(self.ndata, attr_name)) # NOTE: use deepcopy!!
-        kwargs['eq_active'] = deepcopy(self.physics.model.eq_active)
+        kwargs['eq_active'] = deepcopy(self.get_eq_active())
         kwargs['body_pos'] = deepcopy(self.physics.model.body_pos)
         kwargs['body_quat'] = deepcopy(self.physics.model.body_quat)
         save_data = SimSaveData(**kwargs)
@@ -668,7 +687,7 @@ class MujocoSimEnv:
         self.physics.data.qpos[:] = qpos
         self.physics.data.qvel[:] = data.qvel
         self.physics.data.ctrl[:] = data.ctrl
-        self.physics.model.eq_active[:] = eq_active
+        self.set_eq_active(eq_active)
         self.physics.model.body_pos[:] = data.body_pos
         self.physics.model.body_quat[:] = data.body_quat
         self.physics.forward() 
@@ -690,7 +709,8 @@ class MujocoSimEnv:
             self.data.ctrl[ctrl_idxs] = ctrl_vals 
 
             if eq_active_idxs is not None and len(eq_active_idxs) > 0:
-                self.physics.model.eq_active[eq_active_idxs] = eq_active_vals
+                eq_active_attr = self.get_eq_active()
+                eq_active_attr[eq_active_idxs] = eq_active_vals
             self.physics.step() 
             if step % self.render_freq == 0:
                 self.render_all_cameras()
@@ -829,7 +849,48 @@ class MujocoSimEnv:
     
     def get_task_feedback(self, llm_plan, pose_dict) -> str:
         """ Given a plan and a pose dict, checks task-specific conditions and returns feedback string """
-        return "" 
+        return ""
+
+    # ----- RL extension hooks (override per-task) -----
+    def get_action_vocab(self) -> Dict[str, List[str]]:
+        """
+        Return discrete action vocabulary used by the RL high-level policy.
+        Keys (recommended):
+            - "agents":  ordered agent names, e.g. ["Alice", "Bob", "Chad"]
+            - "objects": pickable object names + "WAIT" sentinel at index 0
+            - "targets": placeable target names (panels / bins / waypoints)
+        Each task fills in its own lists.
+        """
+        raise NotImplementedError
+
+    def get_action_mask(self, obs: "EnvState") -> Dict[str, NDArray]:
+        """
+        Return per-agent boolean masks over the factorized action space.
+        For each agent name, returns dict with:
+            - "obj_mask":     shape (|objects|,)   True == legal
+            - "target_mask":  shape (|objects|, |targets|)  joint legality
+        Default mask: everything legal (override per task).
+        """
+        vocab = self.get_action_vocab()
+        n_obj = len(vocab["objects"])
+        n_tgt = len(vocab["targets"])
+        ret = {}
+        for ag in vocab["agents"]:
+            ret[ag] = dict(
+                obj_mask=np.ones(n_obj, dtype=bool),
+                target_mask=np.ones((n_obj, n_tgt), dtype=bool),
+            )
+        return ret
+
+    def get_rl_reward(self, prev_obs: "EnvState", obs: "EnvState",
+                      action_info: Dict) -> Tuple[float, Dict]:
+        """
+        Compute per-step reward for the RL policy.
+        Default: reuse task's binary success signal from get_reward_done.
+        Override per-task to add shaping / handoff / penalties.
+        """
+        r, done = self.get_reward_done(obs)
+        return float(r), dict(r_task=float(r), done=done)
 
 
 

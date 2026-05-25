@@ -8,3 +8,4 @@ from .task_rope import MoveRopeTask
 from .task_sandwich import MakeSandwichTask
 from .task_sort import SortOneBlockTask
 from .task_sweep import SweepTask
+from .task_relay import BlockRelayTask

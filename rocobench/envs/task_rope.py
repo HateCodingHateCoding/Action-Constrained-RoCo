@@ -38,34 +38,34 @@ OBSTACLE_CORNER_NAMES = [
     "obstacle_wall_back_top",
     # "obstacle_wall_back_bottom",
 ]
-ROPE_TASK_CONTEXT="""2 robots, Alice and Bob, together must pick up a long rope and put it precisely into a narrow groove slot. They must lift up the rope together, each grasping one side of the rope. 
-There's an obstacle block wall between the rope and the groove, so the robots must lift the rope **high** above the obstacle block top before putting it into the groove.
-The rope is heavy, so they must hold the rope at the same time, and distance between their grippers must stay fixed, so the rope doesn't drop.
-At each round, if given 'Scene description' and 'Environment feedback', use it to reason about the task and improve any previous plans. 
-Each robot should reach for the closet target, if a robot failed IK to reach a goal, change strategy to a different action.
+ROPE_TASK_CONTEXT="""2个机器人 Alice 和 Bob 必须协作拿起一根长绳并精确放入一个狭窄的凹槽中。它们必须一起抬起绳子，每个机器人各抓住绳子的一端。
+绳子和凹槽之间有一个障碍物方块墙，所以机器人必须把绳子抬到**远高于**障碍物顶部的位置，然后再放入凹槽。
+绳子很重，它们必须同时握住绳子，夹爪之间的距离必须保持固定，以防绳子掉落。
+每一轮，根据"场景描述"和"环境反馈"来推理任务并改进之前的计划。
+每个机器人应选择最近的目标，如果某个机器人的 IK 求解失败，应改变策略选择不同的动作。
 """
 
 ROPE_ACTION_SPACE="""
-[Action Options]
-1) PICK <obj> PATH <path>: only PICK if your gripper is empty, <object> can be either rope_front_end or rope_back_end
-2) PUT <obj> <location> PATH <path>: PUT on either groove_left_end or groove_right_end only if you have already PICKed the rope, each end can only hold only one end of the rope, not both.
-Choose a different <obj> to PICK or PUT if Environment Feedback failed.
-Each <path> must contain exactly four coordinates, each must be evenly distanced from each other and interpolates between start and goal.
-PATHs must efficiently reach target while avoiding collision avoid collision (e.g. move above the objects' heights).
-The PATHs must do top-down pick or place: 
-- move directly atop the rope's end by height 0.2 before PICK: e.g. Alice's gripper is at (0, 0, 0.3), rope_front_end is at (-0.25, 0.39, 0.29): ACTION PICK rope_front_end PATH [(0, 0.1, 0.3),(0, 0.2, 0.49),(-0.1, 0.25, 0.49),(-0.25, 0.39, 0.49)]
-- lift rope up before moving it to PUT: e.g. Bob's gripper is at (0.9, 0, 0.2), groove_left_end is at (0.35, 0.35, 0.43): ACTION PLACE rope_front_end groove_left_end PATH [(0.9,0.0,0.5), (0.5, 0, 0.5), (0.2, 0.1, 0.5),(0.35, 0.35, 0.5)]
+[可用动作]
+1) PICK <物体> PATH <路径>：只有夹爪为空时才能 PICK，<物体>可以是 rope_front_end 或 rope_back_end
+2) PUT <物体> <位置> PATH <路径>：只有已经 PICK 了绳子才能 PUT 到 groove_left_end 或 groove_right_end，每个凹槽端只能放绳子的一端，不能放两端。
+如果环境反馈失败，选择不同的 <物体> 来 PICK 或 PUT。
+每个 <路径> 必须包含恰好四个坐标，坐标间距均匀，在起点和终点之间平滑插值。
+路径必须高效到达目标，同时避免碰撞（例如从物体上方经过）。
+路径必须采用自上而下方式：
+- PICK 前先移动到绳端正上方 0.2 高度处：例如 Alice 夹爪在 (0, 0, 0.3)，rope_front_end 在 (-0.25, 0.39, 0.29)：ACTION PICK rope_front_end PATH [(0, 0.1, 0.3),(0, 0.2, 0.49),(-0.1, 0.25, 0.49),(-0.25, 0.39, 0.49)]
+- PUT 前先将绳子垂直向上提起：例如 Bob 夹爪在 (0.9, 0, 0.2)，groove_left_end 在 (0.35, 0.35, 0.43)：ACTION PLACE rope_front_end groove_left_end PATH [(0.9,0.0,0.5), (0.5, 0, 0.5), (0.2, 0.1, 0.5),(0.35, 0.35, 0.5)]
 
-[Action Output Instruction]
-First output 'EXECUTE\n', then give exactly one ACTION per robot, each on a new line.
-Example: 'EXECUTE\nNAME Alice ACTION PUT rope_front_end groove_right_end PATH <path>\nNAME Bob ACTION PUT rope_back_end groove_left_end PATH <path>\n'
+[动作输出格式]
+先输出 'EXECUTE\\n'，然后为每个机器人给出恰好一个 ACTION，每个动作占一行。
+示例: 'EXECUTE\\nNAME Alice ACTION PUT rope_front_end groove_right_end PATH <路径>\\nNAME Bob ACTION PUT rope_back_end groove_left_end PATH <路径>\\n'
 """
 
-ROPE_TASK_CHAT_PROMPT="""They discuss to find the best paths. Carefully consider environment feedback and others' responses. Robots must coordinate paths to avoid collision.
-They talk in order [Alice],[Bob],[Alice],..., after reaching agreement, plan exactly one ACTION per robot, output an EXECUTE to summarize the plan, and stop talking.
-Their chat and final plan are: """
+ROPE_TASK_CHAT_PROMPT="""它们互相讨论以找到最佳路径。仔细考虑环境反馈和对方的回复。机器人必须协调路径以避免碰撞。
+发言顺序为 [Alice],[Bob],[Alice],...，达成一致后，为每个机器人规划恰好一个 ACTION，输出 EXECUTE 总结计划，然后停止讨论。
+对话和最终计划如下："""
 
-ROPE_TASK_PLAN_PROMPT="""Plan one action for each robot. Analyze the task status, choose the best ACTION for each robot based on its current capability, and plan PATH that efficiently achieves the task and avoids collision:"""
+ROPE_TASK_PLAN_PROMPT="""为每个机器人规划一个动作。分析任务状态，根据每个机器人当前的能力选择最佳 ACTION，规划高效完成任务并避免碰撞的 PATH。"""
 
 class MoveRopeTask(MujocoSimEnv):
     def __init__( 

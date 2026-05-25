@@ -40,30 +40,34 @@ PACK_BIN_SITE_NAMES=[
     "bin_back_middle",
 ]
  
-PACK_TASK_CONTEXT="""[Task Description]
-Two robots, Alice and Bob, each stands at a different side of the table, and together pack all the grocery items on the table into a bin.
-They choose objects closest to their grippers. At each round, they are given [Scene description], [Environment feedback], and must reason about the task. Each robot does **exactly** one ACTION and PATH per round, their PATHs must avoid collision.
+PACK_TASK_CONTEXT="""[任务描述]
+两个机器人 Alice 和 Bob 协作将桌上杂货装入箱子(bin)。
+规则：手空→PICK桌上最近的物品，手里有东西→PLACE到空槽位。每人每轮一个动作。
+路径4个坐标，从当前位置均匀插值到目标上方(z=0.5)。
 """
 
 PACK_ACTION_SPACE="""
-[Action Options]
-1) PICK <obj> PATH <path>: only PICK if your gripper is empty;
-2) PLACE <obj> bin PATH <path>: only if you have already PICKed the object, you can PLACE it into an empty bin slot, do NOT PLACE if another object is already in a slot!
+[可用动作]
+1) PICK <物体> PATH <路径>：只有夹爪为空时才能 PICK；
+2) PLACE <物体> bin PATH <路径>：只有已经 PICK 了物体后，才能将其 PLACE 到箱子的空槽位中，如果某个槽位已有物品则不要放！
 
-Each <path> must contain exactly four <coord>s that smoothly interpolate between start and goal, coordinates must be evenly distanced from each other.
-The robot PATHs must efficiently reach target while avoiding collision avoid collision (e.g. move above the objects' heights).
-The PATHs must do top-down pick or place: 
-- move directly atop an object by height 0.2 before PICK: e.g. Alice's gripper is at (0, 0, 0.3), banana is at (-0.25, 0.39, 0.29): NAME Alice ACTION PICK banana PATH [(0, 0.1, 0.3),(0, 0.2, 0.49),(-0.1, 0.25, 0.49),(-0.25, 0.39, 0.49)]
-- lift an object vertically up before moving it to PLACE: e.g. Bob's gripper is at (0.9, 0, 0.2), bin_front_left is at (0.35, 0.35, 0.43): NAME Bob ACTION PLACE apple bin_front_left PATH [(0.9,0.0,0.5), (0.5, 0, 0.5), (0.2, 0.1, 0.5),(0.35, 0.35, 0.5)]
+每个 <路径> 必须包含恰好四个 <坐标>，在起点和终点之间平滑插值，坐标间距必须均匀。
+机器人路径必须高效到达目标，同时避免碰撞（例如从物体上方经过）。
+路径必须采用自上而下的抓取/放置方式：
+- PICK 前先移动到物体正上方 0.2 高度处：例如 Alice 夹爪在 (0, 0, 0.3)，banana 在 (-0.25, 0.39, 0.29)：NAME Alice ACTION PICK banana PATH [(0, 0.1, 0.3),(0, 0.2, 0.49),(-0.1, 0.25, 0.49),(-0.25, 0.39, 0.49)]
+- PLACE 前先将物体垂直向上提起：例如 Bob 夹爪在 (0.9, 0, 0.2)，bin_front_left 在 (0.35, 0.35, 0.43)：NAME Bob ACTION PLACE apple bin_front_left PATH [(0.9,0.0,0.5), (0.5, 0, 0.5), (0.2, 0.1, 0.5),(0.35, 0.35, 0.5)]
 
-[Action Output Instruction]
-First output 'EXECUTE\n', then give exactly one ACTION per robot, each on a new line.
-Example: 'EXECUTE\nNAME Alice ACTION PICK apple PATH <path>\nNAME Bob ACTION PLACE banana bin_back_middle PATH <path>\n'
+[动作输出格式]
+先输出 'EXECUTE\\n'，然后为每个机器人给出恰好一个 ACTION，每个动作占一行。
+**严格要求：只输出2行NAME，Alice一行Bob一行！如果正拿着物品必须PLACE，手空才能PICK！**
+
+PICK示例（手空时）: NAME Alice ACTION PICK apple PATH [(0.29, 0.06, 0.5), (0.0, 0.2, 0.5), (-0.5, 0.3, 0.5), (-0.73, 0.40, 0.5)]
+PLACE示例（拿着物品时）: NAME Alice ACTION PLACE apple bin_front_left PATH [(-0.73, 0.40, 0.5), (-0.3, 0.4, 0.5), (0.0, 0.41, 0.5), (0.25, 0.41, 0.5)]
 """
 
-PACK_CHAT_PROMPT="""Robots discuss to find the best strategy and path. When each robot talk, it first reflects on the task status and its own capability. 
-Carefully consider [Environment Feedback]. Coordinate with others to plan and improve paths following the instructions. They talk in order [Alice],[Bob],[Alice],..., then, after they agreed, plan exactly one ACTION per robot, output an EXECUTE to summarize the plan and stop talking.
-Their discussion and the final plan: """
+PACK_CHAT_PROMPT="""机器人们互相讨论以找到最佳策略和路径。每个机器人发言时先反思任务状态和自身能力。
+仔细考虑[环境反馈]，协调合作规划并改进路径。发言顺序为 [Alice],[Bob],[Alice],...，达成一致后，为每个机器人规划恰好一个 ACTION，输出 EXECUTE 总结计划并停止讨论。
+讨论和最终计划如下："""
 
 class PackGroceryTask(MujocoSimEnv):
     def __init__( 
@@ -172,7 +176,7 @@ class PackGroceryTask(MujocoSimEnv):
     
     @property
     def waypoint_std_threshold(self):
-        return 0.19
+        return 0.5
 
     def get_allowed_collision_pairs(self) -> List[Tuple[int, int]]:
         
@@ -181,13 +185,15 @@ class PackGroceryTask(MujocoSimEnv):
         table_id = self.physics.model.body("table").id
 
         ret = [(table_id, bin_bottom_id)]
+        world_id = self.physics.model.body("world").id
         all_body_ids = []
         for obj_name in self.item_names:
             body_ids = self.get_all_body_ids(obj_name)
             for body_id in body_ids:
                 ret.append((body_id, bin_bottom_id))
-                # ret.append((body_id, bin_id)) this makes direct path less likely
+                ret.append((body_id, bin_id))
                 ret.append((body_id, table_id))
+                ret.append((body_id, world_id))
                 all_body_ids.append(body_id)
 
         ee_link_ids = self.robots["Alice"].ee_link_body_ids + self.robots["Bob"].ee_link_body_ids

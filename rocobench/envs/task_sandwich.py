@@ -34,22 +34,22 @@ SANDWICH_RECIPES = {
 bacon_recipe = ", ".join(SANDWICH_RECIPES["bacon"])
 
 SANDWICH_ACTION_SPACE="""
-[Action Options]
-1) PICK <obj>, Only PICK if gripper is empty. PICK only the correct next item according to the recipe.
-2) PUT <obj1> <obj2>. <obj1> can be one of the foods. <obj2> can be food, cutting_board, or table.
-3) WAIT, do nothing.
-Only one robot can PUT each round. You must PICK up an item before PUT. 
-[Action Output Instruction]
-Must first output 'EXECUTE\n', then give exactly one action per robot, put each on a new line.
-Example#1: 'EXECUTE\nNAME Chad ACTION PUT bread_slice1 cutting_board\nNAME Dave ACTION PICK tomato\n'
-Example#2: 'EXECUTE\nNAME Chad ACTION WAIT\nNAME Dave ACTION PUT cheese tomato\n'
+[可用动作]
+1) PICK <食材>，只有夹爪为空时才能 PICK。只能按食谱顺序 PICK 下一个正确的食材。
+2) PUT <食材1> <食材2>。<食材1>可以是任意食材。<食材2>可以是食材、cutting_board 或 table。
+3) WAIT，不执行任何操作。
+每轮只有一个机器人可以 PUT。必须先 PICK 食材才能 PUT。
+[动作输出格式]
+必须先输出 'EXECUTE\\n'，然后为每个机器人给出恰好一个动作，每个动作占一行。
+示例#1: 'EXECUTE\\nNAME Chad ACTION PUT bread_slice1 cutting_board\\nNAME Dave ACTION PICK tomato\\n'
+示例#2: 'EXECUTE\\nNAME Chad ACTION WAIT\\nNAME Dave ACTION PUT cheese tomato\\n'
 """
 
-SANDWICH_CHAT_PROMPT="""The robots discuss before taking actions. Carefully consider environment feedback and others' responses, and coordinate to strictly follow the sandwich recipe and avoid collision.
-They talk in order [Chad],[Dave],[Chad],..., after reaching agreement, they output a plan with **exactly** one ACTION per robot, and stop talking. Their chat and final plan are: """
+SANDWICH_CHAT_PROMPT="""机器人们在行动前先进行讨论。仔细考虑环境反馈和对方的回复，协调合作严格按照三明治食谱操作并避免碰撞。
+发言顺序为 [Chad],[Dave],[Chad],...，达成一致后，输出包含每个机器人**恰好一个** ACTION 的计划，然后停止讨论。对话和最终计划如下："""
 
 SANDWICH_PLAN_PROMPT="""
-Plan one ACTION for each robot at every round. The robot ACTIONs must strictly follow the sandwich recipe and avoid collision.
+为每个机器人在每一轮规划一个 ACTION。机器人的动作必须严格按照三明治食谱顺序执行并避免碰撞。
 """
 
 class MakeSandwichTask(MujocoSimEnv):

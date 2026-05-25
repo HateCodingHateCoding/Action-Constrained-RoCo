@@ -31,8 +31,10 @@ class LLMResponseParser:
         self.use_preplace = use_preplace # if True, separate pre-place and place actions
         self.split_parsed_plans = split_parsed_plans 
 
-    def parse(self, obs: EnvState, response: str) -> Tuple[bool, str, List[LLMPathPlan]]: 
-        parsed = ''  
+    def parse(self, obs: EnvState, response: str) -> Tuple[bool, str, List[LLMPathPlan]]:
+        parsed = ''
+        if response is None:
+            return False, "Response is None.", []
         for keyword in self.response_keywords:
             if keyword not in response: 
                 return False, f"Response does not contain {keyword}." , []
@@ -45,6 +47,8 @@ class LLMResponseParser:
             robot_state = getattr(obs, robot_name)
             robot_states[agent_name] = robot_state 
         
+        if 'EXECUTE' not in response:
+            return False, "Response does not contain EXECUTE", None
         execute_str = response.split('EXECUTE')[1]
         # find the \n to split the string into line by line
         lines = execute_str.split('\n')
@@ -963,7 +967,7 @@ class LLMResponseParser:
         # Given a string such as '[(0.00,0.50,0.10), (0.00,0.50,0.10)].' 
         # convert it to a list of tuples of floats using regular expression match  re.
         triplet_strs = re.findall(r"\(([^)]+)\)", path_string)
-        if ',' not in triplet_strs[0]:
+        if len(triplet_strs) == 0 or ',' not in triplet_strs[0]:
             return None
         # remove all the non-numerical characters, e.g. parse "\"0.7" into "0.7", parse "?\"-1.2" into "-1.2" 
 

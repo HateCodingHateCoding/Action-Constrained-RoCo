@@ -35,32 +35,32 @@ CUBE_INIT_RANGE = (
 SWEEP_FRONT_BOUND=0 # bounds robotiq gripper's y-dim
 SWEEP_BROOM_OFFSET=0.432 # fix height offset for panda's broom handle, obs.panda.ee_xpos[2] - env.physics.data.site('broom_bottom').xpos[2]
 SWEEP_DUSTPAN_HEIGHT=0.23
-SWEEP_TASK_CONTEXT="""Alice is a robot holding a dustpan, Bob is a robot holding a broom, together they must sweep up all the cubes on the table.
-To sweep up a cube, Alice must place the dustpan to one side, while Bob must sweep the cube from the other side into the dustpan.
-At each round, given 'Scene description' and 'Environment feedback', use it to reason about the task, and improve any previous plans. Each robot does **exactly** one action per round.\n
+SWEEP_TASK_CONTEXT="""Alice 是一个拿着簸箕的机器人，Bob 是一个拿着扫帚的机器人，它们必须协作把桌上所有方块扫起来。
+要扫起一个方块，Alice 必须把簸箕放在一侧，同时 Bob 从另一侧将方块扫入簸箕。
+每一轮，根据"场景描述"和"环境反馈"来推理任务，改进之前的计划。每个机器人每轮执行**恰好一个**动作。\n
 """
 
 SWEEP_ACTION_SPACE="""
-[Action Options]
-1) MOVE <target>, <target> can only be a cube.
-2) SWEEP <target>, this moves the groom so it pushes the <target> into dustpan, only Bob can SWEEP, Alice must WAIT in front of the same <target> cube when Bob SWEEP.
-3) WAIT, stays at the current spot.
-4) DUMP, only when there are one or more cubes in the dustpan, Alice can DUMP it into trash_bin.
-Only SWEEP a cube after both robots MOVEed to the cube.
-[Action Output Instruction]
-Must first output 'EXECUTE\n', then give exactly one action per robot, put each on a new line.
-Example#1: 'EXECUTE\nNAME Alice ACTION MOVE red_cube\nNAME Bob ACTION MOVE red_cube\n'
-Example#2: 'EXECUTE\nNAME Alice ACTION WAIT\nNAME Bob ACTION SWEEP red_cube\n'
-Example#3: 'EXECUTE\nNAME Alice ACTION DUMP\nNAME Bob ACTION MOVE green_cube\n'
+[可用动作]
+1) MOVE <目标>，<目标>只能是一个方块。
+2) SWEEP <目标>，将扫帚推动<目标>扫入簸箕，只有 Bob 能 SWEEP，当 Bob SWEEP 时 Alice 必须在同一个方块前面 WAIT。
+3) WAIT，保持在当前位置不动。
+4) DUMP，只有当簸箕里有一个或多个方块时，Alice 才能将其倒入 trash_bin。
+只有在两个机器人都 MOVE 到同一个方块后才能 SWEEP。
+[动作输出格式]
+必须先输出 'EXECUTE\\n'，然后为每个机器人给出恰好一个动作，每个动作占一行。
+示例#1: 'EXECUTE\\nNAME Alice ACTION MOVE red_cube\\nNAME Bob ACTION MOVE red_cube\\n'
+示例#2: 'EXECUTE\\nNAME Alice ACTION WAIT\\nNAME Bob ACTION SWEEP red_cube\\n'
+示例#3: 'EXECUTE\\nNAME Alice ACTION DUMP\\nNAME Bob ACTION MOVE green_cube\\n'
 """
 
-SWEEP_CHAT_PROMPT="""They discuss to find the best strategy. When each robot talk, it first reflects on the task status and its own capability. 
-Carefully consider environment feedback and others' responses. Coordinate with other robots to always sweep the same cube.
-They talk in order [Alice],[Bob],[Alice],..., then, after reaching agreement, plan exactly one action per robot, output an EXECUTE to summarize the plan, and stop talking.
-Their entire chat history and the final plan are: """
+SWEEP_CHAT_PROMPT="""它们互相讨论以找到最佳策略。每个机器人发言时先反思任务状态和自身能力。
+仔细考虑环境反馈和对方的回复，协调合作始终扫同一个方块。
+发言顺序为 [Alice],[Bob],[Alice],...，达成一致后，为每个机器人规划恰好一个动作，输出 EXECUTE 总结计划，然后停止讨论。
+完整的对话记录和最终计划如下："""
 
 SWEEP_PLAN_PROMPT="""
-Plan one action for each robot at every round. Analyze the task status and plan for each robot based on its current capability. Make sure they focus on the same cube to sweep.
+为每个机器人在每一轮规划一个动作。分析任务状态，根据每个机器人当前的能力进行规划。确保它们聚焦于同一个方块来扫。
 """
 class SweepTask(MujocoSimEnv):
     def __init__( 
@@ -78,13 +78,13 @@ class SweepTask(MujocoSimEnv):
             "Alice": "ur5e_robotiq",
             "Bob": "panda", 
         }
-        self.robots = dict()  
+        self.robots = dict()
 
-        robotiq_config = UR5E_ROBOTIQ_CONSTANTS.copy()
+        robotiq_config = copy.deepcopy(UR5E_ROBOTIQ_CONSTANTS)
         robotiq_config["all_link_names"].append("dustpan")
         robotiq_config["ee_link_names"].append("dustpan")
 
-        panda_config = PANDA_CONSTANTS.copy()
+        panda_config = copy.deepcopy(PANDA_CONSTANTS)
         panda_config["all_link_names"].append("broom")
         panda_config["arm_link_names"].append("broom")
         panda_config["ee_link_names"].append("broom")
@@ -426,7 +426,7 @@ End your response by either: 1) output PROCEED, if the plans require further dis
         """
         return agent_prompt
 
-    def get_reward_done(self, obs): 
+    def get_reward_done(self, obs):
         all_dumped = True
         reward = 1
         trash_bin_xpos = self.physics.data.body("trash_bin_bottom").xpos
@@ -434,10 +434,106 @@ End your response by either: 1) output PROCEED, if the plans require further dis
             # TODO: handle the corner case where one cube is atop another cube which is inside the trash bin
             xpos = self.physics.data.body(cube).xpos
             if np.linalg.norm(xpos - trash_bin_xpos) > 0.2:
-                all_dumped = False 
+                all_dumped = False
                 reward = 0
-                break 
+                break
         return reward, all_dumped
+
+    # ---------------- RL extension hooks ----------------
+    SWEEP_VERBS = ["WAIT", "MOVE", "SWEEP", "DUMP"]
+
+    def get_action_vocab(self) -> Dict[str, List[str]]:
+        # Per-agent action = (verb, target). Targets are cubes (for MOVE/SWEEP)
+        # plus "trash_bin" / "self" sentinels for DUMP/WAIT.
+        return dict(
+            agents=["Alice", "Bob"],
+            objects=list(self.SWEEP_VERBS),     # verb dim
+            targets=list(self.cube_names) + ["trash_bin", "self"],
+        )
+
+    def _cube_in_dustpan(self, cube_name: str) -> bool:
+        # Heuristic: cube is "in dustpan" if it touches dustpan body.
+        try:
+            contacts = self.physics.data.body(cube_name)
+        except KeyError:
+            return False
+        contact_dict = self.get_contact()
+        return "dustpan" in contact_dict.get(cube_name, set())
+
+    def _cube_in_trash(self, cube_name: str) -> bool:
+        bin_xy = self.physics.data.body("trash_bin_bottom").xpos
+        cube_xy = self.physics.data.body(cube_name).xpos
+        return float(np.linalg.norm(bin_xy - cube_xy)) < 0.2
+
+    def get_action_mask(self, obs: EnvState) -> Dict[str, Any]:
+        vocab = self.get_action_vocab()
+        n_obj = len(vocab["objects"])      # WAIT/MOVE/SWEEP/DUMP
+        n_tgt = len(vocab["targets"])      # cubes + trash_bin + self
+        cubes = self.cube_names
+        ret: Dict[str, Any] = {}
+        any_in_dustpan = any(self._cube_in_dustpan(c) for c in cubes)
+        for agent_name in vocab["agents"]:
+            obj_mask = np.zeros(n_obj, dtype=bool)
+            target_mask = np.zeros((n_obj, n_tgt), dtype=bool)
+            # WAIT(self) always legal
+            obj_mask[0] = True
+            target_mask[0, vocab["targets"].index("self")] = True
+
+            # MOVE <cube> always legal as long as the cube isn't already in trash
+            obj_mask[1] = True
+            for ci, cname in enumerate(cubes):
+                if not self._cube_in_trash(cname):
+                    target_mask[1, vocab["targets"].index(cname)] = True
+
+            # SWEEP <cube>: only Bob, only on un-dumped cubes
+            if agent_name == "Bob":
+                sweep_idx = vocab["objects"].index("SWEEP")
+                for cname in cubes:
+                    if not self._cube_in_trash(cname):
+                        obj_mask[sweep_idx] = True
+                        target_mask[sweep_idx, vocab["targets"].index(cname)] = True
+
+            # DUMP -> trash_bin: only Alice, only when something is in dustpan
+            if agent_name == "Alice" and any_in_dustpan:
+                dump_idx = vocab["objects"].index("DUMP")
+                obj_mask[dump_idx] = True
+                target_mask[dump_idx, vocab["targets"].index("trash_bin")] = True
+
+            ret[agent_name] = dict(obj_mask=obj_mask, target_mask=target_mask)
+        return ret
+
+    def get_rl_reward(self, prev_obs: EnvState, obs: EnvState,
+                      action_info: Dict) -> Tuple[float, Dict]:
+        """Reward shape:
+          + per-cube transitions: not_at -> at, at -> in_dustpan, in_dustpan -> dumped
+          + global success bonus
+          - per-step time cost
+          - invalid / collision penalties from action_info
+        """
+        cubes = self.cube_names
+        prev_dumped = sum(1 for c in cubes if c in prev_obs.objects and
+                          float(np.linalg.norm(self.physics.data.body("trash_bin_bottom").xpos
+                                                - prev_obs.objects[c].xpos)) < 0.2)
+        cur_dumped = sum(1 for c in cubes if c in obs.objects and
+                         float(np.linalg.norm(self.physics.data.body("trash_bin_bottom").xpos
+                                              - obs.objects[c].xpos)) < 0.2)
+        r = 0.0
+        breakdown = {}
+        breakdown["r_dump"] = 5.0 * (cur_dumped - prev_dumped)
+        r += breakdown["r_dump"]
+
+        all_done = (cur_dumped == len(cubes))
+        breakdown["r_done"] = 30.0 if all_done and prev_dumped < len(cubes) else 0.0
+        r += breakdown["r_done"]
+
+        n_invalid = int(action_info.get("n_invalid", 0))
+        breakdown["r_invalid"] = -2.0 * n_invalid
+        r += breakdown["r_invalid"]
+
+        breakdown["r_step"] = -0.05
+        r += breakdown["r_step"]
+        breakdown["done"] = all_done
+        return float(r), breakdown
 
     def describe_robot_capability(self):
         return ""

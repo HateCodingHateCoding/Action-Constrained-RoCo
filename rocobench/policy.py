@@ -155,9 +155,10 @@ class PlannedPathPolicy:
 
                     else:
                         print(obj_name)
-                        breakpoint()
+                        continue
                     
-                    weld_id = physics.named.model.eq_active._convert_key(weld_name)
+                    eq_active_attr = 'eq_active0' if hasattr(physics.named.model, 'eq_active0') else 'eq_active'
+                    weld_id = getattr(physics.named.model, eq_active_attr)._convert_key(weld_name)
                     tograsp[robot_name] = dict(
                         obj_name=obj_name,
                         grasp_site_name=body_name,
@@ -184,13 +185,13 @@ class PlannedPathPolicy:
                     weld_body_name = self.robots[robot_name].weld_body_name
                     weld_name = f"{obj_site_name}_{weld_body_name}" # e.g. apple_top_rhand
                     try:
-                        enabled = physics.named.model.eq_active[weld_name] 
-                        weld_id = physics.named.model.eq_active._convert_key(weld_name)
+                        eq_active_attr = 'eq_active0' if hasattr(physics.named.model, 'eq_active0') else 'eq_active'
+                        enabled = getattr(physics.named.model, eq_active_attr)[weld_name]
+                        weld_id = getattr(physics.named.model, eq_active_attr)._convert_key(weld_name)
                         tograsp[robot_name]["weld_id"] = weld_id # change to weld id!
                         tograsp[robot_name]["weld_name"] = weld_name
                     except KeyError:
-                        print(f"{weld_name} not found in eq_active")
-                        breakpoint()
+                        print(f"{weld_name} not found in {eq_active_attr}")
                         continue
                     
         return tograsp 

@@ -32,29 +32,29 @@ CABINET_RIGHT_RANGE = (
 )
 
 CABINET_ACTION_SPACE="""
-[Action Options]
-1) PICK <handle>.
-2) OPEN <handle>.
-3) PICK <object> PLACE <location>, <object> can be either cup or mug; PICK and PLACE is considered one single ACTION, i.e. you must always PICK and PLACE together
-4) WAIT: stays at current position, choose WAIT to hold the door open.
-<handle> must be either left or right door handle. Only OPEN a door after you already PICKed its handle, after you OPENed a door, must WAIT at the same spot to hold it open. 
-<object> must be either mug or cup, <location> must be the correct coaster.
+[可用动作]
+1) PICK <把手>。
+2) OPEN <把手>。
+3) PICK <物体> PLACE <位置>，<物体>可以是 cup 或 mug；PICK 和 PLACE 视为一个完整的 ACTION，必须同时使用。
+4) WAIT：保持当前位置不动，选择 WAIT 来保持门开启状态。
+<把手>必须是 left 或 right door handle。只有在已经 PICK 了把手后才能 OPEN 门，OPEN 门后必须 WAIT 在原地保持门开启。
+<物体>必须是 mug 或 cup，<位置>必须是对应的杯垫。
 
-[Action Output Instruction]
-Must first output 'EXECUTE\n', then give **exactly** one action per robot, put each on a new line.
-Example: 'EXECUTE\nNAME Alice ACTION PICK mug PLACE mug_coaster\nNAME Bob ACTION WAIT\nNAME Chad ACTION OPEN left_door_handle\n'
+[动作输出格式]
+必须先输出 'EXECUTE\\n'，然后为每个机器人给出**恰好一个**动作，每个动作占一行。
+示例: 'EXECUTE\\nNAME Alice ACTION PICK mug PLACE mug_coaster\\nNAME Bob ACTION WAIT\\nNAME Chad ACTION OPEN left_door_handle\\n'
 """
 
-CABINET_TASK_CONTEXT="""3 robots, Alice, Bob, Chad together must take a mug and a cup out of a cabinet and place them on the correct coasters.
-Both left and right cabinet doors should be OPENed and stays open before anything inside can be PICKed and PLACEed. Robots must coordinate to complete the task most efficiently while avoiding collision.
-At each round, given 'Scene description' and 'Environment feedback', use it to reason about the task, and improve any previous plans. 
-Each robot does **exactly** one ACTION per round, selected from only one of the above 4 options.
+CABINET_TASK_CONTEXT="""3个机器人 Alice、Bob、Chad 必须协作，从柜子里取出一个马克杯(mug)和一个杯子(cup)，放到各自正确的杯垫上。
+柜子的左门和右门都必须先被打开并保持开启，之后才能从里面取出物品。机器人必须协调合作，高效完成任务并避免碰撞。
+每一轮，根据"场景描述"和"环境反馈"来推理任务，改进之前的计划。
+每个机器人每轮执行**恰好一个** ACTION，只能从以上4个选项中选择。
 """
-CABINET_TASK_CHAT_PROMPT="""Robots discuss to find the best strategy. When each robot talk, it must first reflects on the task status, and its own capability. 
-Carefully consider environment feedback and others' responses. It must coordinate with other robots' paths to avoid collision. They talk in order [Alice],[Bob],[Chad],[Alice],..., then, after reaching agreement, output an EXECUTE to summarize the plan, and stop talking.
-Their chat history and plan are: """
+CABINET_TASK_CHAT_PROMPT="""机器人们互相讨论以找到最佳策略。每个机器人发言时，必须先反思任务状态和自身能力。
+仔细考虑环境反馈和其他机器人的回复，必须协调路径以避免碰撞。发言顺序为 [Alice],[Bob],[Chad],[Alice],...，达成一致后，输出 EXECUTE 总结计划，然后停止讨论。
+对话记录和计划如下："""
 
-CABINET_TASK_PLAN_PROMPT="""Reason about the task step-by-step, and find the best strategy to coordinate the robots. Carefully consider environment feedback to improve your plan. Output exactly one optimal ACTION for each robot at the current round.\n"""
+CABINET_TASK_PLAN_PROMPT="""请逐步分析任务，找到协调各机器人的最佳策略。仔细考虑环境反馈来改进计划。为当前轮的每个机器人输出恰好一个最优 ACTION。\n"""
 
 CABINET_ACTION_SPACE_PATH="""
 Options for <action>:
@@ -131,12 +131,12 @@ class CabinetTask(MujocoSimEnv):
             **suction_config,
         )
 
-        self.align_threshold = 0.25
+        self.align_threshold = 0.15
         self.coaster_pos = dict()
         for geom_name in ["mug_coaster", "cup_coaster"]:
             self.coaster_pos[geom_name] = self.physics.data.geom(geom_name).xpos.copy()
-            self.coaster_pos[geom_name][2] += 0.25 # move up a bit
-            self.coaster_pos[geom_name][0] += 0.09 # because cup_right grasp site is not at center
+            self.coaster_pos[geom_name][2] += 0.15
+            self.coaster_pos[geom_name][0] += 0.09
         self.open_pose = dict(
             left_door_handle=self.compute_open_pose("left_door_handle"),
             right_door_handle=self.compute_open_pose("right_door_handle"),
@@ -424,7 +424,11 @@ End your response by either: 1) output PROCEED, if the plans require further dis
 
 """
         return agent_prompt
-    
+
+    @property
+    def use_preplace(self):
+        return True
+
     def get_reward_done(self, obs: EnvState):
         reward = 1
         done = True

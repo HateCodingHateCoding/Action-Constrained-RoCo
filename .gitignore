@@ -2,6 +2,12 @@ data/
 openai_key.json
 claude_key.json
 .DS_Store
+.vscode/
+checkpoints/
+*.jpg
+*.mp4
+roco_env/
+report.html
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
