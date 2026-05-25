@@ -20,6 +20,22 @@ rocobench/envs/base_env.py     get_action_vocab / get_action_mask / get_rl_rewar
 rocobench/envs/task_sort.py    实现以上三个钩子 + 子奖励
 ```
 
+## 环境配置
+
+```bash
+pip install torch dm_control mujoco numpy matplotlib
+```
+
+如需运行 LLM 相关实验（hybrid、mask-aware 消融等），需设置环境变量：
+
+```powershell
+$env:GLM_API_KEY = "你的智谱API key"        # 必需，用于 LLM 基线和混合策略
+$env:NVIDIA_API_KEY = "你的NVIDIA key"      # 可选
+$env:DEEPSEEK_API_KEY = "你的DeepSeek key"  # 可选
+```
+
+纯 RL 训练和评估不需要任何 API key。
+
 ## 一分钟跑通
 
 ```powershell
