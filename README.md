@@ -167,7 +167,7 @@ panel 中心 0.1～0.18m 之间，把它原地"吸附"到 panel 中心（不动 
 **对比说明**：LLM-only 基线已通过项目内置的 `run_dialog.py` 跑通：
 
 ```powershell
-# 我们用 GLM-4-flash（智谱），key 已在 prompting/llm_api.py 里
+# 需要先设置环境变量 GLM_API_KEY
 python run_dialog.py --task sort --num_runs 5 --tsteps 8 --comm_mode dialog `
     --llm_source glm-4-flash --skip_display --temperature 0.0 `
     --run_name llm_only_glm4flash --data_dir data/llm_only_sort

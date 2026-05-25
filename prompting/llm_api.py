@@ -4,14 +4,16 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-API_KEY = "d309bb8b155a4d81b0e63d88d1d83e05.bae9U0mMfD9qHZAN"
+import os
+
+API_KEY = os.environ.get("GLM_API_KEY", "")
 API_BASE = "https://open.bigmodel.cn/api/paas/v4"
 DEFAULT_MODEL = "glm-4-flash"
 
-NVIDIA_API_KEY = "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"
+NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
 NVIDIA_API_BASE = "https://integrate.api.nvidia.com/v1"
 
-DEEPSEEK_API_KEY = "sk-1ea3328f177840828616dda3833218e5"
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_API_BASE = "https://api.deepseek.com/v1"
 
 NVIDIA_MODELS = {
